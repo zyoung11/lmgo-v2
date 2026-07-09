@@ -220,6 +220,9 @@ func generateModelsINI() error {
 	sb.WriteString("# lmgo models.ini\n")
 	sb.WriteString("# Edit this file to define your models.\n")
 	sb.WriteString("# Section name = model identifier used in API requests.\n\n")
+	sb.WriteString("# Server-level settings\n")
+	sb.WriteString("models-max = 1\n")
+	sb.WriteString("models-autoload = false\n\n")
 
 	args := defaultArgs()
 	if len(args) > 0 {
@@ -285,15 +288,53 @@ func stopLlamaServer() {
 	time.Sleep(300 * time.Millisecond)
 }
 
+func loadServerINI() (modelsMax int, modelsAutoload bool) {
+	modelsMax = 1
+	modelsAutoload = false
+
+	data, err := os.ReadFile("models.ini")
+	if err != nil {
+		return
+	}
+
+	for line := range strings.SplitSeq(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			break
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		switch key {
+		case "models-max":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 {
+				modelsMax = n
+			}
+		case "models-autoload":
+			modelsAutoload = val == "true" || val == "yes" || val == "1"
+		}
+	}
+	return
+}
+
 func startLlamaServer() error {
 	serverCmdMu.Lock()
 	stopLlamaServer()
 	defer serverCmdMu.Unlock()
 
+	modelsMax, modelsAutoload := loadServerINI()
+
 	args := []string{
 		"--models-preset", "models.ini",
 		"--port", strconv.Itoa(config.Port),
 		"--host", "0.0.0.0",
+		"--models-max", strconv.Itoa(modelsMax),
+	}
+	if !modelsAutoload {
+		args = append(args, "--no-models-autoload")
 	}
 
 	serverExe := filepath.Join("server", "llama-server.exe")
