@@ -31,9 +31,10 @@ var defaultConfigData []byte
 var serverArchives embed.FS
 
 type Config struct {
-	AutoStartEnabled bool     `json:"autoStartEnabled"`
-	Port             int      `json:"port"`
-	PollInterval     int      `json:"pollInterval"`
+	AutoStartEnabled bool `json:"autoStartEnabled"`
+	Port             int  `json:"port"`
+	PollInterval     int  `json:"pollInterval"`
+	ModelsMax        int  `json:"modelsMax"`
 }
 
 type modelSection struct {
@@ -123,6 +124,9 @@ func loadConfig() error {
 	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 2
+	}
+	if config.ModelsMax <= 0 {
+		config.ModelsMax = 1
 	}
 	return nil
 }
@@ -220,9 +224,6 @@ func generateModelsINI() error {
 	sb.WriteString("# lmgo models.ini\n")
 	sb.WriteString("# Edit this file to define your models.\n")
 	sb.WriteString("# Section name = model identifier used in API requests.\n\n")
-	sb.WriteString("# Server-level settings\n")
-	sb.WriteString("models-max = 1\n\n")
-
 	args := defaultArgs()
 	if len(args) > 0 {
 		sb.WriteString("[*]\n")
@@ -287,42 +288,16 @@ func stopLlamaServer() {
 	time.Sleep(300 * time.Millisecond)
 }
 
-func loadModelsMaxINI() int {
-	data, err := os.ReadFile("models.ini")
-	if err != nil {
-		return 1
-	}
-
-	for line := range strings.SplitSeq(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			break
-		}
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if strings.TrimSpace(parts[0]) == "models-max" {
-			if n, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && n > 0 {
-				return n
-			}
-		}
-	}
-	return 1
-}
-
 func startLlamaServer() error {
 	serverCmdMu.Lock()
 	stopLlamaServer()
 	defer serverCmdMu.Unlock()
 
-	modelsMax := loadModelsMaxINI()
-
 	args := []string{
 		"--models-preset", "models.ini",
 		"--port", strconv.Itoa(config.Port),
 		"--host", "0.0.0.0",
-		"--models-max", strconv.Itoa(modelsMax),
+		"--models-max", strconv.Itoa(config.ModelsMax),
 		"--no-models-autoload",
 	}
 
