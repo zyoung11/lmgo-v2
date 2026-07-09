@@ -27,9 +27,8 @@ lmgo-v2 is a Windows system tray app that wraps llama.cpp server in **router mod
 1. Download `lmgo-v2.exe` from [releases](https://github.com/zyoung11/lmgo-v2/releases)
 2. Place it in an empty folder
 3. Run it — a tray icon appears, `config.json` and `models.ini` are generated
-4. Edit `config.json` to set your `modelDir` path
-5. Edit `models.ini` to tune per-model parameters
-6. Click **Refresh** in the tray menu to apply changes
+4. Edit `models.ini` to define your models (paths, parameters)
+5. Click **Refresh** in the tray menu to apply changes
 
 ## Configuration
 
@@ -37,37 +36,17 @@ lmgo-v2 is a Windows system tray app that wraps llama.cpp server in **router mod
 
 ```json
 {
-  "modelDir": "./models",
   "autoStartEnabled": false,
   "port": 19966,
-  "pollInterval": 2,
-  "defaultArgs": [
-    "--host", "0.0.0.0",
-    "--no-host",
-    "-ngl", "999",
-    "--flash-attn", "on",
-    "--ctx-size", "131072",
-    "--cache-type-k", "f16",
-    "--cache-type-v", "f16",
-    "--kv-offload",
-    "--no-mmap",
-    "--direct-io",
-    "--mlock",
-    "--split-mode", "layer",
-    "--main-gpu", "0"
-  ],
-  "excludePatterns": ["mmproj*", "mtp*"]
+  "pollInterval": 2
 }
 ```
 
 | Field | Description |
 |---|---|
-| `modelDir` | Directory containing `.gguf` model files |
 | `autoStartEnabled` | Auto-start with Windows |
 | `port` | llama-server HTTP port |
 | `pollInterval` | How often (seconds) to check which model is loaded for the tray display |
-| `defaultArgs` | Global default CLI args applied to all models via `models.ini` `[*]` section |
-| `excludePatterns` | Glob patterns to exclude from model scanning |
 
 ### models.ini
 

@@ -27,9 +27,8 @@ lmgo-v2 是一个 Windows 系统托盘应用，封装了 llama.cpp server 的 **
 1. 从 [releases](https://github.com/zyoung11/lmgo-v2/releases) 下载 `lmgo-v2.exe`
 2. 放到空文件夹中运行
 3. 托盘图标出现，自动生成 `config.json` 和 `models.ini`
-4. 编辑 `config.json` 设置 `modelDir` 路径
-5. 编辑 `models.ini` 调整各模型参数
-6. 托盘菜单点 **Refresh** 使配置生效
+4. 编辑 `models.ini` 定义模型（路径、参数等）
+5. 托盘菜单点 **Refresh** 使配置生效
 
 ## 配置
 
@@ -37,37 +36,17 @@ lmgo-v2 是一个 Windows 系统托盘应用，封装了 llama.cpp server 的 **
 
 ```json
 {
-  "modelDir": "./models",
   "autoStartEnabled": false,
   "port": 19966,
-  "pollInterval": 2,
-  "defaultArgs": [
-    "--host", "0.0.0.0",
-    "--no-host",
-    "-ngl", "999",
-    "--flash-attn", "on",
-    "--ctx-size", "131072",
-    "--cache-type-k", "f16",
-    "--cache-type-v", "f16",
-    "--kv-offload",
-    "--no-mmap",
-    "--direct-io",
-    "--mlock",
-    "--split-mode", "layer",
-    "--main-gpu", "0"
-  ],
-  "excludePatterns": ["mmproj*", "mtp*"]
+  "pollInterval": 2
 }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `modelDir` | `.gguf` 模型文件目录 |
 | `autoStartEnabled` | 是否开机自启 |
 | `port` | llama-server HTTP 端口 |
 | `pollInterval` | 托盘刷新已加载模型的间隔（秒） |
-| `defaultArgs` | 全局默认参数，对应 `models.ini` 的 `[*]` 段 |
-| `excludePatterns` | glob 模式排除不需要的模型文件 |
 
 ### models.ini
 

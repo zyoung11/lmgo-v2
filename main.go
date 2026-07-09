@@ -31,19 +31,14 @@ var defaultConfigData []byte
 var serverArchives embed.FS
 
 type Config struct {
-	ModelDir         string   `json:"modelDir"`
 	AutoStartEnabled bool     `json:"autoStartEnabled"`
-	AutoLoadModel    string   `json:"autoLoadModel,omitempty"`
 	Port             int      `json:"port"`
 	PollInterval     int      `json:"pollInterval"`
-	DefaultArgs      []string `json:"defaultArgs"`
-	ExcludePatterns  []string `json:"excludePatterns,omitempty"`
 }
 
 type modelSection struct {
 	Name string
 	Path string
-	Args map[string]string
 }
 
 var (
@@ -130,13 +125,31 @@ func loadConfig() error {
 	if config.PollInterval <= 0 {
 		config.PollInterval = 2
 	}
-	if config.ExcludePatterns == nil {
-		config.ExcludePatterns = []string{}
-	}
-	if config.ModelDir == "" {
-		config.ModelDir = "./models"
-	}
 	return nil
+}
+
+func defaultArgs() []string {
+	return []string{
+		"--host", "0.0.0.0",
+		"--no-host",
+		"--prio-batch", "3",
+		"--ctx-size", "131072",
+		"--batch-size", "4096",
+		"--ubatch-size", "4096",
+		"--threads", "0",
+		"--threads-batch", "0",
+		"-ngl", "999",
+		"--flash-attn", "on",
+		"--cache-type-k", "f16",
+		"--cache-type-v", "f16",
+		"--kv-offload",
+		"--no-mmap",
+		"--no-repack",
+		"--direct-io",
+		"--mlock",
+		"--split-mode", "layer",
+		"--main-gpu", "0",
+	}
 }
 
 func saveConfig() error {
@@ -198,75 +211,32 @@ func extractServer() error {
 }
 
 func generateModelsINI() error {
-	models, err := scanModels()
-	if err != nil {
-		return err
+	iniPath := "models.ini"
+	if existing, err := os.ReadFile(iniPath); err == nil {
+		modelSections = parseINISections(string(existing))
+		return nil
 	}
 
 	var sb strings.Builder
-	sb.WriteString("# lmgo generated models.ini\n")
-	sb.WriteString("# Edit this file to customize per-model parameters.\n")
+	sb.WriteString("# lmgo models.ini\n")
+	sb.WriteString("# Edit this file to define your models.\n")
 	sb.WriteString("# Section name = model identifier used in API requests.\n\n")
 
-	if len(config.DefaultArgs) > 0 {
+	args := defaultArgs()
+	if len(args) > 0 {
 		sb.WriteString("[*]\n")
-		for i := 0; i < len(config.DefaultArgs); i += 2 {
-			if i+1 < len(config.DefaultArgs) {
-				key := strings.TrimPrefix(config.DefaultArgs[i], "--")
+		for i := 0; i < len(args); i += 2 {
+			if i+1 < len(args) {
+				key := strings.TrimPrefix(args[i], "--")
 				key = strings.TrimPrefix(key, "-")
-				fmt.Fprintf(&sb, "%s = %s\n", key, config.DefaultArgs[i+1])
+				fmt.Fprintf(&sb, "%s = %s\n", key, args[i+1])
 			} else {
-				key := strings.TrimPrefix(config.DefaultArgs[i], "--")
+				key := strings.TrimPrefix(args[i], "--")
 				key = strings.TrimPrefix(key, "-")
 				fmt.Fprintf(&sb, "%s = true\n", key)
 			}
 		}
 		sb.WriteString("\n")
-	}
-
-	modelSections = nil
-	for _, m := range models {
-		name := strings.TrimSuffix(filepath.Base(m), ".gguf")
-		fmt.Fprintf(&sb, "[%s]\n", name)
-		fmt.Fprintf(&sb, "model = %s\n", m)
-		sb.WriteString("\n")
-
-		modelSections = append(modelSections, modelSection{
-			Name: name,
-			Path: m,
-		})
-	}
-
-	iniPath := "models.ini"
-	existing, err := os.ReadFile(iniPath)
-	if err == nil {
-		newModels, err := scanModels()
-		if err != nil {
-			return err
-		}
-		modelSections = parseINISections(string(existing))
-
-		existingPaths := make(map[string]bool)
-		for _, s := range modelSections {
-			existingPaths[filepath.Clean(s.Path)] = true
-		}
-
-		var appended strings.Builder
-		appended.Write(existing)
-		for _, m := range newModels {
-			if existingPaths[filepath.Clean(m)] {
-				continue
-			}
-			name := strings.TrimSuffix(filepath.Base(m), ".gguf")
-			fmt.Fprintf(&appended, "\n[%s]\n", name)
-			fmt.Fprintf(&appended, "model = %s\n", m)
-
-			modelSections = append(modelSections, modelSection{
-				Name: name,
-				Path: m,
-			})
-		}
-		return os.WriteFile(iniPath, []byte(appended.String()), 0644)
 	}
 
 	return os.WriteFile(iniPath, []byte(sb.String()), 0644)
@@ -295,58 +265,6 @@ func parseINISections(content string) []modelSection {
 		}
 	}
 	return sections
-}
-
-func scanModels() ([]string, error) {
-	var result []string
-	entries, err := os.ReadDir(config.ModelDir)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".gguf") {
-			continue
-		}
-		path := filepath.Join(config.ModelDir, name)
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-		if isExcluded(name, path) {
-			continue
-		}
-		result = append(result, path)
-	}
-	for i := 0; i < len(result); i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[i] > result[j] {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
-	return result, nil
-}
-
-func isExcluded(filename, fullPath string) bool {
-	for _, pattern := range config.ExcludePatterns {
-		if matched, _ := filepath.Match(pattern, filename); matched {
-			return true
-		}
-		if matched, _ := filepath.Match(pattern, filepath.Base(fullPath)); matched {
-			return true
-		}
-		if strings.ContainsAny(pattern, "/\\") {
-			if rel, err := filepath.Rel(config.ModelDir, fullPath); err == nil {
-				if matched, _ := filepath.Match(pattern, rel); matched {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func startLlamaServer() error {
