@@ -1,0 +1,27 @@
+{
+  "modelDir": "",
+  "autoStartEnabled": false,
+  "port": 19966,
+  "defaultArgs": [
+    "--host", "0.0.0.0",
+    "--no-host",
+    "--prio-batch", "3",
+    "--ctx-size", "131072",
+    "--batch-size", "4096",
+    "--ubatch-size", "4096",
+    "--threads", "0",
+    "--threads-batch", "0",
+    "-ngl", "999",
+    "--flash-attn", "on",
+    "--cache-type-k", "f16",
+    "--cache-type-v", "f16",
+    "--kv-offload",
+    "--no-mmap",
+    "--no-repack",
+    "--direct-io",
+    "--mlock",
+    "--split-mode", "layer",
+    "--main-gpu", "0"
+  ],
+  "excludePatterns": ["mmproj*", "*mmproj", "mtp*", "*mtp"]
+}

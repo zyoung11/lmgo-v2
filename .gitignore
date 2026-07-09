@@ -1,1 +1,7 @@
 llama.cpp
+*.zip
+*.exe
+*.exe~
+lmgo.json
+models.ini
+server/
