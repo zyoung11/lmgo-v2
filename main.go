@@ -221,8 +221,7 @@ func generateModelsINI() error {
 	sb.WriteString("# Edit this file to define your models.\n")
 	sb.WriteString("# Section name = model identifier used in API requests.\n\n")
 	sb.WriteString("# Server-level settings\n")
-	sb.WriteString("models-max = 1\n")
-	sb.WriteString("models-autoload = false\n\n")
+	sb.WriteString("models-max = 1\n\n")
 
 	args := defaultArgs()
 	if len(args) > 0 {
@@ -288,13 +287,10 @@ func stopLlamaServer() {
 	time.Sleep(300 * time.Millisecond)
 }
 
-func loadServerINI() (modelsMax int, modelsAutoload bool) {
-	modelsMax = 1
-	modelsAutoload = false
-
+func loadModelsMaxINI() int {
 	data, err := os.ReadFile("models.ini")
 	if err != nil {
-		return
+		return 1
 	}
 
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -306,18 +302,13 @@ func loadServerINI() (modelsMax int, modelsAutoload bool) {
 		if len(parts) != 2 {
 			continue
 		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		switch key {
-		case "models-max":
-			if n, err := strconv.Atoi(val); err == nil && n > 0 {
-				modelsMax = n
+		if strings.TrimSpace(parts[0]) == "models-max" {
+			if n, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && n > 0 {
+				return n
 			}
-		case "models-autoload":
-			modelsAutoload = val == "true" || val == "yes" || val == "1"
 		}
 	}
-	return
+	return 1
 }
 
 func startLlamaServer() error {
@@ -325,16 +316,14 @@ func startLlamaServer() error {
 	stopLlamaServer()
 	defer serverCmdMu.Unlock()
 
-	modelsMax, modelsAutoload := loadServerINI()
+	modelsMax := loadModelsMaxINI()
 
 	args := []string{
 		"--models-preset", "models.ini",
 		"--port", strconv.Itoa(config.Port),
 		"--host", "0.0.0.0",
 		"--models-max", strconv.Itoa(modelsMax),
-	}
-	if !modelsAutoload {
-		args = append(args, "--no-models-autoload")
+		"--no-models-autoload",
 	}
 
 	serverExe := filepath.Join("server", "llama-server.exe")
