@@ -53,7 +53,6 @@ var (
 		modelLabel   *systray.MenuItem
 		webInterface *systray.MenuItem
 		autoStart    *systray.MenuItem
-		refresh      *systray.MenuItem
 		quit         *systray.MenuItem
 	}
 )
@@ -267,15 +266,29 @@ func parseINISections(content string) []modelSection {
 	return sections
 }
 
+func stopLlamaServer() {
+	if serverCmd == nil || serverCmd.Process == nil {
+		return
+	}
+	exec.Command("taskkill", "/f", "/t", "/pid", strconv.Itoa(serverCmd.Process.Pid)).Run()
+
+	done := make(chan struct{})
+	go func() {
+		serverCmd.Process.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+	}
+	serverCmd = nil
+	time.Sleep(300 * time.Millisecond)
+}
+
 func startLlamaServer() error {
 	serverCmdMu.Lock()
+	stopLlamaServer()
 	defer serverCmdMu.Unlock()
-
-	if serverCmd != nil && serverCmd.Process != nil {
-		serverCmd.Process.Kill()
-		serverCmd.Process.Wait()
-		serverCmd = nil
-	}
 
 	args := []string{
 		"--models-preset", "models.ini",
@@ -398,7 +411,6 @@ func buildMenu() {
 	systray.AddSeparator()
 	menuItems.webInterface = systray.AddMenuItem("Web Interface", "Open web UI")
 	menuItems.autoStart = systray.AddMenuItem("Auto Startup", "Toggle auto-start")
-	menuItems.refresh = systray.AddMenuItem("Refresh", "Reload config and models.ini")
 	systray.AddSeparator()
 	menuItems.quit = systray.AddMenuItem("Exit", "Quit lmgo")
 
@@ -415,12 +427,6 @@ func buildMenu() {
 			setAutoStart(config.AutoStartEnabled)
 			saveConfig()
 			refreshMenuState()
-		}
-	}()
-
-	go func() {
-		for range menuItems.refresh.ClickedCh {
-			refreshAll()
 		}
 	}()
 
@@ -449,23 +455,6 @@ func refreshMenuState() {
 	} else {
 		menuItems.autoStart.SetTitle("Auto Startup")
 	}
-}
-
-func refreshAll() {
-	if err := loadConfig(); err != nil {
-		log.Printf("Failed to reload config: %v", err)
-		return
-	}
-	if err := generateModelsINI(); err != nil {
-		log.Printf("Failed to regenerate models.ini: %v", err)
-		return
-	}
-	if err := startLlamaServer(); err != nil {
-		log.Printf("Failed to restart llama-server: %v", err)
-		return
-	}
-	refreshMenuState()
-	log.Printf("Refreshed: %d models", len(modelSections))
 }
 
 func startupShortcutPath() (string, error) {
@@ -514,9 +503,6 @@ func isAutoStartEnabled() (bool, error) {
 
 func onExit() {
 	serverCmdMu.Lock()
-	if serverCmd != nil && serverCmd.Process != nil {
-		serverCmd.Process.Kill()
-		serverCmd.Process.Wait()
-	}
+	stopLlamaServer()
 	serverCmdMu.Unlock()
 }

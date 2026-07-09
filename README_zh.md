@@ -28,7 +28,6 @@ lmgo-v2 是一个 Windows 系统托盘应用，封装了 llama.cpp server 的 **
 2. 放到空文件夹中运行
 3. 托盘图标出现，自动生成 `config.json` 和 `models.ini`
 4. 编辑 `models.ini` 定义模型（路径、参数等）
-5. 托盘菜单点 **Refresh** 使配置生效
 
 ## 配置
 
@@ -88,7 +87,6 @@ mmproj = D:/LLM/mmproj-F16.gguf
 
 段名即 API 请求中的模型标识符。所有 [llama-server CLI 参数](https://github.com/ggml-org/llama.cpp) 都可以作为 INI key（去掉前缀 `--` 即可）。
 
-`models.ini` 已存在时，Refresh 只追加新扫描到的 `.gguf` 文件，手动编辑的内容不会被覆盖。
 
 ## API 使用
 
@@ -121,7 +119,6 @@ client.chat.completions.create(
 ──────────────
 Web Interface        ← 打开 http://localhost:{port}
 ✓ Auto Startup       ← 开关开机自启
-Refresh              ← 重载 config.json + models.ini + 重启 server
 ──────────────
 Exit
 ```

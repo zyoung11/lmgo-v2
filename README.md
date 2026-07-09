@@ -28,7 +28,6 @@ lmgo-v2 is a Windows system tray app that wraps llama.cpp server in **router mod
 2. Place it in an empty folder
 3. Run it — a tray icon appears, `config.json` and `models.ini` are generated
 4. Edit `models.ini` to define your models (paths, parameters)
-5. Click **Refresh** in the tray menu to apply changes
 
 ## Configuration
 
@@ -88,7 +87,6 @@ mmproj = D:/LLM/mmproj-F16.gguf
 
 The section name is the model identifier used in API requests. All [llama-server CLI flags](https://github.com/ggml-org/llama.cpp) are valid INI keys (remove the leading `--`).
 
-When `models.ini` already exists, Refresh only appends newly discovered `.gguf` files — your hand-edited config is preserved.
 
 ## API Usage
 
