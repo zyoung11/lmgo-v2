@@ -35,6 +35,7 @@ type Config struct {
 	AutoStartEnabled bool     `json:"autoStartEnabled"`
 	AutoLoadModel    string   `json:"autoLoadModel,omitempty"`
 	Port             int      `json:"port"`
+	PollInterval     int      `json:"pollInterval"`
 	DefaultArgs      []string `json:"defaultArgs"`
 	ExcludePatterns  []string `json:"excludePatterns,omitempty"`
 }
@@ -50,8 +51,11 @@ var (
 	serverCmd     *exec.Cmd
 	serverCmdMu   sync.Mutex
 	modelSections []modelSection
+	currentModel  string
+	currentModelMu sync.RWMutex
 
 	menuItems struct {
+		modelLabel   *systray.MenuItem
 		webInterface *systray.MenuItem
 		autoStart    *systray.MenuItem
 		refresh      *systray.MenuItem
@@ -106,7 +110,7 @@ func hideConsole() {
 }
 
 func loadConfig() error {
-	configFile := "lmgo.json"
+	configFile := "config.json"
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -123,6 +127,9 @@ func loadConfig() error {
 	if config.Port == 0 {
 		config.Port = 19966
 	}
+	if config.PollInterval <= 0 {
+		config.PollInterval = 2
+	}
 	if config.ExcludePatterns == nil {
 		config.ExcludePatterns = []string{}
 	}
@@ -137,7 +144,7 @@ func saveConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to encode config: %v", err)
 	}
-	return os.WriteFile("lmgo.json", data, 0644)
+	return os.WriteFile("config.json", data, 0644)
 }
 
 func extractServer() error {
@@ -360,9 +367,10 @@ func startLlamaServer() error {
 
 	serverExe := filepath.Join("server", "llama-server.exe")
 	cmd := exec.Command(serverExe, args...)
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	cmd.Stdout = os.Stdout
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start llama-server: %v", err)
@@ -405,6 +413,52 @@ func waitForServer(port int, timeout time.Duration) error {
 	}
 }
 
+func trackCurrentModel() {
+	ticker := time.NewTicker(time.Duration(config.PollInterval) * time.Second)
+	defer ticker.Stop()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/models", config.Port)
+
+	for range ticker.C {
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+
+		var result struct {
+			Data []struct {
+				ID     string `json:"id"`
+				Status struct {
+					Value string `json:"value"`
+				} `json:"status"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		var loaded string
+		for _, m := range result.Data {
+			if m.Status.Value == "loaded" {
+				loaded = m.ID
+				break
+			}
+		}
+
+		currentModelMu.Lock()
+		changed := currentModel != loaded
+		currentModel = loaded
+		currentModelMu.Unlock()
+
+		if changed {
+			refreshMenuState()
+		}
+	}
+}
+
 func onReady() {
 	systray.SetIcon(iconData)
 	systray.SetTitle("lmgo")
@@ -413,12 +467,17 @@ func onReady() {
 	buildMenu()
 	refreshMenuState()
 
+	go trackCurrentModel()
+
 	log.Printf("lmgo v2 started. http://localhost:%d, Models: %d",
 		config.Port, len(modelSections))
 
 }
 
 func buildMenu() {
+	menuItems.modelLabel = systray.AddMenuItem("Idle", "Currently loaded model")
+	menuItems.modelLabel.Disable()
+	systray.AddSeparator()
 	menuItems.webInterface = systray.AddMenuItem("Web Interface", "Open web UI")
 	menuItems.autoStart = systray.AddMenuItem("Auto Startup", "Toggle auto-start")
 	menuItems.refresh = systray.AddMenuItem("Refresh", "Reload config and models.ini")
@@ -455,6 +514,18 @@ func buildMenu() {
 }
 
 func refreshMenuState() {
+	currentModelMu.RLock()
+	model := currentModel
+	currentModelMu.RUnlock()
+
+	if model == "" {
+		menuItems.modelLabel.SetTitle("Idle")
+		menuItems.modelLabel.Disable()
+	} else {
+		menuItems.modelLabel.SetTitle("● " + model)
+		menuItems.modelLabel.Enable()
+	}
+
 	if config.AutoStartEnabled {
 		menuItems.autoStart.SetTitle("✓ Auto Startup")
 	} else {

@@ -1,6 +1,6 @@
 {
-  "modelDir": "",
-  "autoStartEnabled": false,
+  "modelDir": "D:/LLM",
+  "autoStartEnabled": true,
   "port": 19966,
   "pollInterval": 2,
   "defaultArgs": [
