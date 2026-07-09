@@ -43,11 +43,11 @@ type modelSection struct {
 }
 
 var (
-	config        Config
-	serverCmd     *exec.Cmd
-	serverCmdMu   sync.Mutex
-	modelSections []modelSection
-	currentModel  string
+	config         Config
+	serverCmd      *exec.Cmd
+	serverCmdMu    sync.Mutex
+	modelSections  []modelSection
+	currentModel   string
 	currentModelMu sync.RWMutex
 
 	menuItems struct {
@@ -298,7 +298,6 @@ func startLlamaServer() error {
 		"--port", strconv.Itoa(config.Port),
 		"--host", "0.0.0.0",
 		"--models-max", strconv.Itoa(config.ModelsMax),
-		"--no-models-autoload",
 	}
 
 	serverExe := filepath.Join("server", "llama-server.exe")
