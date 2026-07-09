@@ -5,3 +5,4 @@ llama.cpp
 lmgo.json
 models.ini
 server/
+config.json
