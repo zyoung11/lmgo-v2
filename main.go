@@ -254,7 +254,7 @@ func parseINISections(content string) []modelSection {
 			}
 			continue
 		}
-		if currentName != "" && strings.HasPrefix(trimmed, "model") {
+		if currentName != "" && strings.HasPrefix(trimmed, "model ") {
 			parts := strings.SplitN(trimmed, "=", 2)
 			if len(parts) == 2 {
 				sections = append(sections, modelSection{
