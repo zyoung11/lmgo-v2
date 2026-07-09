@@ -4,15 +4,13 @@
 
 [中文版 README](README_zh.md)
 
-lmgo-v2 is a Windows system tray app that wraps llama.cpp server in **router mode**, providing dynamic model switching without restarts.
+lmgo-v2 is a Windows system tray app that wraps llama.cpp server in **router mode**, providing dynamic model switching without restarts. The app itself is backend-agnostic — pair it with any llama-server build (CUDA, ROCm, Vulkan, CPU).
 
 ## System Requirements
 
 - **OS:** Windows 11
 - **Architecture:** x86_64
-- **GPU:** CUDA 12.4+ compatible
-
-For AMD ROCm builds, download a compatible llama-server from [llamacpp-rocm releases](https://github.com/lemonade-sdk/llamacpp-rocm/releases).
+- **llama-server:** Any backend — grab a pre-built binary from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), or for AMD GPUs use [llamacpp-rocm](https://github.com/lemonade-sdk/llamacpp-rocm/releases).
 
 ## Features
 
@@ -139,12 +137,15 @@ client.chat.completions.create(
 
 ## Building from Source
 
+1. Download the latest llama.cpp server package from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) (e.g. `llama-b*-bin-win-cuda-cu12.4-x64.zip`) and place it in the project root
+2. Run:
+
 ```bash
 go mod tidy
 go build -ldflags "-s -w -H windowsgui" .
 ```
 
-The embedded llama-server is extracted on first run. To use a different build, replace the `.zip` file before building.
+The `.zip` is embedded into the binary via `//go:embed` and extracted to `server/` on first run. To use a different build (e.g. ROCm), replace the `.zip` file before building.
 
 ## Related
 

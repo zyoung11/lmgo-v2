@@ -4,15 +4,13 @@
 
 [English README](README.md)
 
-lmgo-v2 是一个 Windows 系统托盘应用，封装了 llama.cpp server 的 **router 模式**，实现无需重启的动态模型切换。
+lmgo-v2 是一个 Windows 系统托盘应用，封装了 llama.cpp server 的 **router 模式**，实现无需重启的动态模型切换。程序本身与后端无关 — 搭配任意 llama-server 版本（CUDA、ROCm、Vulkan、CPU）即可使用。
 
 ## 系统要求
 
 - **操作系统：** Windows 11
 - **架构：** x86_64
-- **显卡：** CUDA 12.4+ 兼容
-
-如需 AMD ROCm 版本，请从 [llamacpp-rocm releases](https://github.com/lemonade-sdk/llamacpp-rocm/releases) 下载兼容的 llama-server。
+- **llama-server：** 任意后端均可 — 从 [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) 下载预编译版本，AMD 显卡可用 [llamacpp-rocm](https://github.com/lemonade-sdk/llamacpp-rocm/releases)。
 
 ## 功能特性
 
@@ -151,12 +149,15 @@ Exit
 
 ## 从源码构建
 
+1. 从 [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) 下载最新的 llama.cpp server 包（如 `llama-b*-bin-win-cuda-cu12.4-x64.zip`），放到项目根目录
+2. 运行：
+
 ```bash
 go mod tidy
 go build -ldflags "-s -w -H windowsgui" .
 ```
 
-内嵌的 llama-server 首次运行时自动解压。如需替换为其他版本，构建前替换 `.zip` 文件即可。
+`.zip` 通过 `//go:embed` 嵌入二进制，首次运行时解压到 `server/`。如需替换为 ROCm 版本，构建前换 `.zip` 文件即可。
 
 ## 相关项目
 
