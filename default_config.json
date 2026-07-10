@@ -2,5 +2,6 @@
   "autoStartEnabled": false,
   "port": 19966,
   "pollInterval": 2,
-  "modelsMax": 1
+  "modelsMax": 1,
+  "logViewerPort": 19967
 }
