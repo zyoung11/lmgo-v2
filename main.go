@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/getlantern/systray"
 )
@@ -42,6 +44,62 @@ type modelSection struct {
 	Path string
 }
 
+// LogCapture accumulates the most recent cap bytes of downstream output with
+// thread-safe append. Older content is dropped when the cap is exceeded so
+// memory stays bounded.
+type LogCapture struct {
+	mu  sync.Mutex
+	buf []byte
+	cap int
+}
+
+// serverLog collects llama-server stdout / stderr plus runtime log output so
+// the user can review it via the tray menu or on a Refresh failure.
+var serverLog = &LogCapture{cap: 256 * 1024}
+
+// Write appends p, keeping at most the most recent cap bytes.
+func (l *LogCapture) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf = append(l.buf, p...)
+	if len(l.buf) > l.cap {
+		l.buf = l.buf[len(l.buf)-l.cap:]
+	}
+	return len(p), nil
+}
+
+// String returns a snapshot of the buffered contents.
+func (l *LogCapture) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return string(l.buf)
+}
+
+// Reset empties the buffer.
+func (l *LogCapture) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf = l.buf[:0]
+}
+
+// priorityWriter tries primary first and falls back to secondary when the
+// primary returns an error. io.MultiWriter stops at the first failing writer,
+// which would silently drop llama-server and lmgo runtime log output under the
+// GUI subsystem where os.Stdout writes return EBADF but the in-memory buffer
+// should still receive the bytes.
+type priorityWriter struct {
+	primary, secondary io.Writer
+}
+
+// Write attempts primary first; on error it falls back to secondary.
+func (w *priorityWriter) Write(p []byte) (int, error) {
+	n, err := w.primary.Write(p)
+	if err == nil {
+		return n, nil
+	}
+	return w.secondary.Write(p)
+}
+
 // llmProcess owns the llama-server child process so that Process.Wait is invoked
 // exactly once and stop signals are routed deterministically under a single mutex.
 type llmProcess struct {
@@ -63,6 +121,7 @@ var (
 		modelLabel   *systray.MenuItem
 		webInterface *systray.MenuItem
 		refresh      *systray.MenuItem
+		viewLog      *systray.MenuItem
 		autoStart    *systray.MenuItem
 		quit         *systray.MenuItem
 	}
@@ -70,6 +129,7 @@ var (
 
 func main() {
 	hideConsole()
+	log.SetOutput(&priorityWriter{primary: os.Stderr, secondary: serverLog})
 
 	if exePath, err := os.Executable(); err == nil {
 		if err := os.Chdir(filepath.Dir(exePath)); err != nil {
@@ -78,7 +138,7 @@ func main() {
 	}
 
 	if err := loadConfig(); err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		fatalExit("Config error", "Failed to load config: %v", err)
 	}
 
 	regEnabled, _ := isAutoStartEnabled()
@@ -88,15 +148,16 @@ func main() {
 	}
 
 	if err := extractServer(); err != nil {
-		log.Fatalf("Failed to extract server: %v", err)
+		fatalExit("Server error", "Failed to extract server: %v", err)
 	}
 
 	if err := generateModelsINI(); err != nil {
-		log.Fatalf("Failed to generate models.ini: %v", err)
+		fatalExit("Config error", "Failed to generate models.ini: %v", err)
 	}
 
 	if err := startLlamaServer(); err != nil {
-		log.Fatalf("Failed to start llama-server: %v", err)
+		msg := fmt.Sprintf("Failed to start llama-server: %v\n\n--- llama-server output ---\n%s", err, serverLog.String())
+		fatalExit("Startup error", "%s", msg)
 	}
 
 	systray.Run(onReady, onExit)
@@ -112,6 +173,67 @@ func hideConsole() {
 	user32 := syscall.NewLazyDLL("user32.dll")
 	showWindow := user32.NewProc("ShowWindow")
 	showWindow.Call(hwnd, 0)
+}
+
+// fatalExit pops an error dialog so the user sees fatal startup failures even
+// when stderr is hidden behind the GUI subsystem's lack of console, then
+// terminates the process.
+func fatalExit(title, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	u32 := syscall.NewLazyDLL("user32.dll")
+	titlePtr, _ := syscall.UTF16PtrFromString("lmgo-v2: " + title)
+	textPtr, _ := syscall.UTF16PtrFromString(msg)
+	u32.NewProc("MessageBoxW").Call(
+		0,
+		uintptr(unsafe.Pointer(textPtr)),
+		uintptr(unsafe.Pointer(titlePtr)),
+		0x10,
+	)
+	os.Exit(1)
+}
+
+// psLogDialogScript renders a scrollable, selectable, readonly log viewer
+// using a Windows Forms TextBox invoked via PowerShell. The two %s slots are
+// filled with the title and body, both base64-encoded so the script is robust
+// against any quoting issues in the user-visible content.
+const psLogDialogScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$text = [Text.Encoding]::Utf8.GetString([Convert]::FromBase64String("%s"))
+$form = New-Object System.Windows.Forms.Form
+$form.Text = [Text.Encoding]::Utf8.GetString([Convert]::FromBase64String("%s"))
+$form.Size = New-Object System.Drawing.Size(880, 560)
+$form.StartPosition = "CenterScreen"
+$form.MinimumSize = New-Object System.Drawing.Size(400, 200)
+$tb = New-Object System.Windows.Forms.TextBox
+$tb.Multiline = $true
+$tb.ScrollBars = 'Both'
+$tb.ReadOnly = $true
+$tb.WordWrap = $false
+$tb.Dock = 'Fill'
+$tb.Font = New-Object System.Drawing.Font('Consolas', 10)
+$tb.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+$tb.ForeColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
+$tb.Text = $text
+$tb.Select(0, 0)
+$tb.ScrollToCaret()
+$form.Controls.Add($tb)
+$form.ShowDialog() | Out-Null
+`
+
+// showLogDialog pops a scrollable, selectable, readonly log window backed by
+// Windows Forms. The window is dispatched to a hidden PowerShell process so
+// the lmgo event loop stays responsive while the dialog is open. Supports
+// scrolling, mouse selection, Ctrl+A / Ctrl+C copy, and resizing.
+func showLogDialog(title, text string) {
+	encodedBody := base64.StdEncoding.EncodeToString([]byte(text))
+	encodedTitle := base64.StdEncoding.EncodeToString([]byte(title))
+	script := fmt.Sprintf(psLogDialogScript, encodedBody, encodedTitle)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		log.Printf("showLogDialog: %v", err)
+	}
 }
 
 func loadConfig() error {
@@ -335,9 +457,9 @@ func (p *llmProcess) startLocked() error {
 
 	serverExe := filepath.Join("server", "llama-server.exe")
 	cmd := exec.Command(serverExe, args...)
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &priorityWriter{primary: os.Stdout, secondary: serverLog}
+	cmd.Stderr = &priorityWriter{primary: os.Stderr, secondary: serverLog}
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	cmd.Stdout = os.Stdout
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start llama-server: %v", err)
@@ -365,8 +487,10 @@ func startLlamaServer() error {
 
 // refreshLlamaServer stops the running llama-server, reloads config.json from
 // disk, and starts a new child with the fresh configuration. models.ini edits
-// applied by the user take effect on return.
+// applied by the user take effect on return. The log buffer is reset so a
+// subsequent failure shows only fresh output.
 func refreshLlamaServer() error {
+	serverLog.Reset()
 	proc.mu.Lock()
 	defer proc.mu.Unlock()
 	if err := proc.stopLocked(); err != nil {
@@ -468,6 +592,7 @@ func buildMenu() {
 	systray.AddSeparator()
 	menuItems.webInterface = systray.AddMenuItem("Web Interface", "Open web UI")
 	menuItems.refresh = systray.AddMenuItem("Refresh", "Reload models.ini and restart llama-server")
+	menuItems.viewLog = systray.AddMenuItem("View Log", "Show llama-server output log")
 	menuItems.autoStart = systray.AddMenuItem("Auto Startup", "Toggle auto-start")
 	systray.AddSeparator()
 	menuItems.quit = systray.AddMenuItem("Exit", "Quit lmgo")
@@ -487,10 +612,22 @@ func buildMenu() {
 			if err := refreshLlamaServer(); err != nil {
 				log.Printf("Refresh failed: %v", err)
 				menuItems.refresh.SetTitle("Refresh (failed)")
+				showLogDialog("lmgo-v2: Refresh failed",
+					fmt.Sprintf("%v\n\n--- llama-server output ---\n%s", err, serverLog.String()))
 				time.Sleep(2 * time.Second)
 			}
 			menuItems.refresh.SetTitle("Refresh")
 			menuItems.refresh.Enable()
+		}
+	}()
+
+	go func() {
+		for range menuItems.viewLog.ClickedCh {
+			logMsg := serverLog.String()
+			if logMsg == "" {
+				logMsg = "(empty)"
+			}
+			showLogDialog("lmgo-v2: Log", logMsg)
 		}
 	}()
 
