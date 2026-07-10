@@ -42,10 +42,19 @@ type modelSection struct {
 	Path string
 }
 
+// llmProcess owns the llama-server child process so that Process.Wait is invoked
+// exactly once and stop signals are routed deterministically under a single mutex.
+type llmProcess struct {
+	mu   sync.Mutex
+	cmd  *exec.Cmd
+	done chan struct{}
+}
+
+// proc is the package-level handle to the running llama-server.
+var proc llmProcess
+
 var (
 	config         Config
-	serverCmd      *exec.Cmd
-	serverCmdMu    sync.Mutex
 	modelSections  []modelSection
 	currentModel   string
 	currentModelMu sync.RWMutex
@@ -53,6 +62,7 @@ var (
 	menuItems struct {
 		modelLabel   *systray.MenuItem
 		webInterface *systray.MenuItem
+		refresh      *systray.MenuItem
 		autoStart    *systray.MenuItem
 		quit         *systray.MenuItem
 	}
@@ -269,30 +279,53 @@ func parseINISections(content string) []modelSection {
 	return sections
 }
 
-func stopLlamaServer() {
-	if serverCmd == nil || serverCmd.Process == nil {
-		return
-	}
-	exec.Command("taskkill", "/f", "/t", "/pid", strconv.Itoa(serverCmd.Process.Pid)).Run()
-
-	done := make(chan struct{})
-	go func() {
-		serverCmd.Process.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-	}
-	serverCmd = nil
-	time.Sleep(300 * time.Millisecond)
+// stopLlamaServer terminates the running llama-server if any.
+// Returns an error if the child fails to exit within the grace period.
+func stopLlamaServer() error {
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	return proc.stopLocked()
 }
 
-func startLlamaServer() error {
-	serverCmdMu.Lock()
-	stopLlamaServer()
-	defer serverCmdMu.Unlock()
+// stopLocked terminates the tracked child if any. The caller must hold proc.mu.
+// Sends a graceful taskkill first; if the child does not exit within 1s a forced
+// taskkill /f /t is issued, then we wait up to 5s for the Wait goroutine to close
+// the done channel. Returns an error only when the child remains alive afterwards.
+func (p *llmProcess) stopLocked() error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+	pid := p.cmd.Process.Pid
+	kill := func(force bool) error {
+		args := []string{"/pid", strconv.Itoa(pid)}
+		if force {
+			args = append(args, "/f", "/t")
+		}
+		return exec.Command("taskkill", args...).Run()
+	}
+	_ = kill(false)
+	select {
+	case <-p.done:
+	case <-time.After(1 * time.Second):
+		if err := kill(true); err != nil {
+			log.Printf("taskkill /f failed for pid %d: %v", pid, err)
+		}
+		select {
+		case <-p.done:
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("llama-server pid %d did not exit within 6s", pid)
+		}
+	}
+	p.cmd = nil
+	p.done = nil
+	return nil
+}
 
+// startLocked spawns a fresh llama-server child. The caller must hold proc.mu
+// and is expected to have already called stopLocked if a previous child exists.
+// Each new cmd is paired with its own done channel that is closed exactly once
+// by the Wait goroutine.
+func (p *llmProcess) startLocked() error {
 	args := []string{
 		"--models-preset", "models.ini",
 		"--port", strconv.Itoa(config.Port),
@@ -304,25 +337,45 @@ func startLlamaServer() error {
 	cmd := exec.Command(serverExe, args...)
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
 	cmd.Stdout = os.Stdout
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start llama-server: %v", err)
 	}
 
-	serverCmd = cmd
-
+	p.cmd = cmd
+	p.done = make(chan struct{})
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("llama-server exited: %v", err)
-		}
-		serverCmdMu.Lock()
-		serverCmd = nil
-		serverCmdMu.Unlock()
+		_ = cmd.Wait()
+		close(p.done)
 	}()
 
 	return waitForServer(config.Port, 60*time.Second)
+}
+
+// startLlamaServer stops any existing child and starts a fresh llama-server.
+func startLlamaServer() error {
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	if err := proc.stopLocked(); err != nil {
+		return err
+	}
+	return proc.startLocked()
+}
+
+// refreshLlamaServer stops the running llama-server, reloads config.json from
+// disk, and starts a new child with the fresh configuration. models.ini edits
+// applied by the user take effect on return.
+func refreshLlamaServer() error {
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	if err := proc.stopLocked(); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	if err := loadConfig(); err != nil {
+		log.Printf("config reload failed: %v", err)
+	}
+	return proc.startLocked()
 }
 
 func waitForServer(port int, timeout time.Duration) error {
@@ -414,6 +467,7 @@ func buildMenu() {
 	menuItems.modelLabel.Disable()
 	systray.AddSeparator()
 	menuItems.webInterface = systray.AddMenuItem("Web Interface", "Open web UI")
+	menuItems.refresh = systray.AddMenuItem("Refresh", "Reload models.ini and restart llama-server")
 	menuItems.autoStart = systray.AddMenuItem("Auto Startup", "Toggle auto-start")
 	systray.AddSeparator()
 	menuItems.quit = systray.AddMenuItem("Exit", "Quit lmgo")
@@ -422,6 +476,21 @@ func buildMenu() {
 		for range menuItems.webInterface.ClickedCh {
 			url := fmt.Sprintf("http://127.0.0.1:%d", config.Port)
 			exec.Command("cmd", "/c", "start", url).Start()
+		}
+	}()
+
+	go func() {
+		for range menuItems.refresh.ClickedCh {
+			menuItems.refresh.SetTitle("Refreshing…")
+			menuItems.refresh.Disable()
+			log.Printf("Refreshing llama-server…")
+			if err := refreshLlamaServer(); err != nil {
+				log.Printf("Refresh failed: %v", err)
+				menuItems.refresh.SetTitle("Refresh (failed)")
+				time.Sleep(2 * time.Second)
+			}
+			menuItems.refresh.SetTitle("Refresh")
+			menuItems.refresh.Enable()
 		}
 	}()
 
@@ -506,7 +575,7 @@ func isAutoStartEnabled() (bool, error) {
 }
 
 func onExit() {
-	serverCmdMu.Lock()
-	stopLlamaServer()
-	serverCmdMu.Unlock()
+	if err := stopLlamaServer(); err != nil {
+		log.Printf("shutdown failed: %v", err)
+	}
 }
